@@ -1,0 +1,6 @@
+# Worker の静的ファイル（Bootstrap・Bootstrap Icons）の見出し。住所に版が入っているので、長く覚えさせてよい
+# 予約画面は STUDIO の埋め込み（別の住所）から読むので、字の形（フォント）を読めるよう Access-Control-Allow-Origin を付ける
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+  Access-Control-Allow-Origin: *
+  X-Content-Type-Options: nosniff

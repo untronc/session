@@ -1,0 +1,27 @@
+{
+  "name": "untronc-session",
+  "version": "0.1.0",
+  "description": "時間枠のセッションの予約（予約画面の API と管理画面。Cloudflare Workers・D1・Google カレンダー）",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "vitest run",
+    "test": "vitest run",
+    "postinstall": "node dev/copy-vendor.mjs",
+    "vendor": "node dev/copy-vendor.mjs",
+    "dev": "wrangler dev --port 8800",
+    "db:local": "wrangler d1 migrations apply DB --local"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.147.0"
+  },
+  "dependencies": {
+    "bootstrap": "5.3.3",
+    "bootstrap-icons": "1.11.3"
+  }
+}

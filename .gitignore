@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.dev.vars
+*.bak-*
+# 施設ごとの設定（運用者のメール・D1 の ID）は公開しない。手元だけに置く
+sites/*
+public/vendor/
