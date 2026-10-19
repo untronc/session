@@ -332,3 +332,47 @@ describe("不正利用対策・ログイン・設定", () => {
     expect((await row(res.id)).name).toBe("見本 花子");
   });
 });
+
+describe("qa の指摘（2026-10-20）", () => {
+  it("コース無しで手で入れたセッションは、予定の題・メール・知らせに名前も「null」も出さない", async () => {
+    const r = await admin(worker, cookie, "manual", { kind: "session", startAt: "2026-10-26T10:00", minutes: 90, name: "田中 一郎", payState: "unpaid", googleEmail: "tanaka@gmail.com", sendMail: true });
+    expect([...cal.events.values()][0].summary).toBe(`【仮押さえ】${r.id} セッション`);
+    const m = mails.find((x) => x.to[0] === "tanaka@gmail.com");
+    expect(m.text).not.toContain("null");
+    expect(m.text).not.toContain("undefined");
+    for (const x of mails.filter((y) => y.to[0] === "owner@example.com")) expect(x.subject).not.toContain("田中");
+  });
+  it("仮押さえのときにカレンダーの予定を入れられなかった予約は、入金済みにしたときに予定を入れて Meet の URL を付ける", async () => {
+    const id = await open("2026-10-25T13:30");
+    const create = cal.create;
+    cal.create = async () => { throw new Error("Google カレンダー 503"); };
+    const res = await bookApi(worker, guest(id));
+    expect((await row(res.id)).calendar_event_id).toBe(null);
+    cal.create = create;
+    const r = await admin(worker, cookie, "paid", { id: res.id });
+    expect(r.meetUrl).toMatch(/^https:\/\/meet\.google\.com\//);
+    expect([...cal.events.values()][0].summary).toBe(`【予約】${res.id} インストール付き`);
+  });
+  it("予約確認メールと前日のメールも、連絡用のアドレスへ送る", async () => {
+    const id = await open("2026-10-25T13:30");
+    const res = await bookApi(worker, guest(id, { contactEmail: "hanako@example.co.jp" }));
+    mails.length = 0;
+    await admin(worker, cookie, "paid", { id: res.id });
+    expect(mails[0].to).toEqual(["hanako@example.co.jp"]);
+    mails.length = 0;
+    await remindJobs(site, env, new Date("2026-10-24T00:00:00Z"));
+    expect(mails[0].to).toEqual(["hanako@example.co.jp"]);
+  });
+  it("決まった時刻の処理：9:00 は前日のメール、0:00 は枠を作る・片付け", async () => {
+    const id = await open("2026-10-25T13:30");
+    const res = await bookApi(worker, guest(id));
+    await admin(worker, cookie, "paid", { id: res.id });
+    mails.length = 0;
+    const waits = [];
+    const ctx = { waitUntil: (p) => waits.push(p) };
+    await makeWorker(cal, new Date("2026-10-24T00:00:00Z")).scheduled({ cron: "0 0 * * *" }, env, ctx);
+    expect(await waits[0]).toMatchObject({ sent: 1 });
+    await makeWorker(cal, new Date("2026-10-24T15:00:00Z")).scheduled({ cron: "0 15 * * *" }, env, ctx);
+    expect(await waits[1]).toHaveProperty("slots");
+  });
+});

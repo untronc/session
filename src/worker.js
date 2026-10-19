@@ -1,4 +1,5 @@
 // Worker の入口。施設の設定を受け取って、fetch と scheduled を返す
+//   /                    予約画面（page.js。紙芝居の形）
 //   /api                 予約画面の API（api.js）
 //   /admin               管理画面（ログインしていなければ Google のログインへ）。画面はまだ（次の段で、宿泊の予約システムの管理画面を写して作る）
 //   /admin/login・/admin/callback・/admin/logout
@@ -8,6 +9,7 @@ import { handleApi } from "./api.js";
 import { admit, clearStateCookie, currentUser, finishLogin, logoutCookie, startLogin } from "./auth.js";
 import { CRON_REMIND, dailyJobs, remindJobs } from "./cron.js";
 import { googleCalendar } from "./gcal.js";
+import { bookingPage } from "./page.js";
 
 const SECURITY = {
   "X-Frame-Options": "DENY",
@@ -49,6 +51,11 @@ export function createWorker(site, opts = {}) {
 
   async function route(request, env, url) {
     const p = url.pathname;
+    if (p === "/") {
+      // 予約画面は Google Fonts（Noto Sans JP）を読む
+      const csp = SECURITY["Content-Security-Policy"].replace("style-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com");
+      return html(bookingPage(site), 200, { "Content-Security-Policy": csp });
+    }
     if (p === "/api") return handleApi(site, request, env, clock(), calendarOf(env));
     if (p === "/admin/login") return startLogin(site, env, url.searchParams.get("next"));
     if (p === "/admin/callback") {

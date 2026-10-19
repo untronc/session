@@ -125,7 +125,7 @@ export async function book(site, env, cal, body, now) {
   ]);
   if (!res[0].meta.changes) throw new InputError({ slotId: FULL });
 
-  const b = { id, name: input.name, start_at: start, end_at: end, course_name: course.name, service_name: course.service_name, amount: course.price, due_date: due };
+  const b = { id, kind: "session", name: input.name, start_at: start, end_at: end, course_name: course.name, service_name: course.service_name, amount: course.price, due_date: due };
   // カレンダーに予定を入れて枠を押さえる（題に名前とメールは書かない）
   b.calendar_note = await holdOnCalendar(env, cal, settings, b, "【仮押さえ】");
   const to = input.contactEmail || input.googleEmail;
@@ -137,11 +137,14 @@ export async function book(site, env, cal, body, now) {
   return { ok: true, id, start_at: start, end_at: end, course: course.name, amount: course.price, due_date: due, bank: settings.bank, mailOk: !mailHold.startsWith("failed") };
 }
 
+/** 予定の題の名前の部分。お客様の名前は書かない（基本設計書 4節）。打ち合わせは運用者が付けた題 */
+export const eventLabel = (b) => (b.kind === "meeting" ? b.name : b.course_name || "セッション");
+
 /** カレンダーに予定を入れ、ID を予約に書く。うまくいかなければ理由の文を返す（予約は止めない。運用者への知らせに書く） */
 export async function holdOnCalendar(env, cal, settings, b, prefix) {
   if (!cal) return "未設定のため予定を入れていません";
   try {
-    const eventId = await cal.create(settings.eventCalendar, { summary: `${prefix}${b.id} ${b.course_name || b.name}`, start: b.start_at, end: b.end_at });
+    const eventId = await cal.create(settings.eventCalendar, { summary: `${prefix}${b.id} ${eventLabel(b)}`, start: b.start_at, end: b.end_at });
     await env.DB.prepare("UPDATE bookings SET calendar_event_id = ? WHERE id = ?").bind(eventId, b.id).run();
     return "";
   } catch (err) {

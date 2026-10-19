@@ -13,7 +13,7 @@
 //   GET  /admin/api/settings  POST /admin/api/settings {...}  GET /admin/api/calendars
 //   GET  /admin/api/stats?month=YYYY-MM                      月ごとの確定の件数と金額（0円・試しの予約は数えない）
 import { addMinutes, cancelRate, dateOf, dueDate, overlaps, parseLocal, refundAmount } from "./calc.js";
-import { catalog, holdOnCalendar, InputError, newBookingId } from "./booking.js";
+import { eventLabel, holdOnCalendar, InputError, newBookingId } from "./booking.js";
 import { addDays, parseYmd, todayJst, ymd } from "./dates.js";
 import { sendMail } from "./mail.js";
 import { confirmMail, holdMail, notifyMail } from "./mailtext.js";
@@ -154,10 +154,15 @@ async function confirmAndTell(ctx, b, withMeet = true) {
   const { db, site, env, cal } = ctx;
   const settings = await loadSettings(site, db);
   let note = "";
+  if (cal && !b.calendar_event_id) {
+    // 仮押さえのときに予定を入れられなかった予約は、ここで入れる
+    note = await holdOnCalendar(env, cal, settings, b, "【予約】");
+    b.calendar_event_id = (await db.prepare("SELECT calendar_event_id FROM bookings WHERE id = ?").bind(b.id).first())?.calendar_event_id || null;
+  }
   if (cal && b.calendar_event_id) {
     try {
       // 題を「仮押さえ」から「予約」へ（できなくても Meet の URL は付ける）
-      await cal.retitle(settings.eventCalendar, b.calendar_event_id, `【予約】${b.id} ${b.course_name || b.name}`).catch(() => {});
+      await cal.retitle(settings.eventCalendar, b.calendar_event_id, `【予約】${b.id} ${eventLabel(b)}`).catch(() => {});
       if (withMeet && !b.meet_url) {
         b.meet_url = await cal.addMeet(settings.eventCalendar, b.calendar_event_id);
         await db.prepare("UPDATE bookings SET meet_url = ? WHERE id = ?").bind(b.meet_url, b.id).run();
@@ -278,6 +283,11 @@ async function reschedule(ctx, body) {
   ]);
   // 予定を動かす。Meet の URL は同じ予定なので変わらない
   let note = "";
+  if (cal && !b.calendar_event_id) {
+    // 仮押さえのときに予定を入れられなかった予約は、ここで入れる
+    note = await holdOnCalendar(env, cal, settings, b, "【予約】");
+    b.calendar_event_id = (await db.prepare("SELECT calendar_event_id FROM bookings WHERE id = ?").bind(b.id).first())?.calendar_event_id || null;
+  }
   if (cal && b.calendar_event_id) {
     try {
       const settings = await loadSettings(ctx.site, db);

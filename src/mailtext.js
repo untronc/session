@@ -26,12 +26,12 @@ export function holdMail(site, b, settings) {
     text: [
       `${b.name} 様`,
       ``,
-      `「${b.service_name}」の仮のご予約を受け付けました。`,
+      `「${b.service_name || "セッション"}」の仮のご予約を受け付けました。`,
       ``,
       `予約番号　${b.id}`,
       `日時　　　${whenText(b.start_at, b.end_at)}`,
-      `コース　　${b.course_name}`,
-      `金額　　　${yen(b.amount)}（税込）`,
+      ...(b.course_name ? [`コース　　${b.course_name}`] : []),
+      `金額　　　${yen(b.amount || 0)}（税込）`,
       ``,
       `■ お振り込み`,
       `${dayText(b.due_date)}までに、下の口座へお振り込みください。`,
@@ -62,7 +62,7 @@ export function confirmMail(site, b) {
       ``,
       `予約番号　${b.id}`,
       `日時　　　${whenText(b.start_at, b.end_at)}`,
-      `コース　　${b.course_name}`,
+      ...(b.course_name ? [`コース　　${b.course_name}`] : []),
       `場所　　　Google Meet`,
       `　　　　　${b.meet_url || "（URL は追ってお送りします）"}`,
       ``,
@@ -101,7 +101,7 @@ export function remindMail(site, b) {
 /** 運用者への知らせ（仮押さえ・確定） */
 export function notifyMail(site, b, what) {
   return {
-    subject: `【予約】${what} ${b.id} ${whenText(b.start_at, b.end_at)} ${b.course_name || b.name}`,
+    subject: `【予約】${what} ${b.id} ${whenText(b.start_at, b.end_at)} ${b.kind === "meeting" ? "打ち合わせ" : b.course_name || "セッション"}`,
     text: [
       `${what}：${b.id}`,
       `日時　${whenText(b.start_at, b.end_at)}`,
