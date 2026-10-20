@@ -197,9 +197,9 @@ describe("[要件6-8] 手で入れる予約（セッション・打ち合わせ�
   });
   it("枠の外にも入れられる。カレンダーとぶつかるときは知らせ、もう一度押せば入れる", async () => {
     cal.outside.push({ start: "2026-10-26T09:00", end: "2026-10-26T10:00" });
-    const first = await admin(worker, cookie, "manual", { kind: "session", startAt: "2026-10-26T10:00", minutes: 90, name: "田中", payState: "unpaid" });
+    const first = await admin(worker, cookie, "manual", { kind: "session", startAt: "2026-10-26T10:00", minutes: 90, name: "田中", payState: "unpaid", amount: "6600" });
     expect(first).toMatchObject({ ok: false, needForce: true });
-    const again = await admin(worker, cookie, "manual", { kind: "session", startAt: "2026-10-26T10:00", minutes: 90, name: "田中", payState: "unpaid", force: true });
+    const again = await admin(worker, cookie, "manual", { kind: "session", startAt: "2026-10-26T10:00", minutes: 90, name: "田中", payState: "unpaid", amount: "6600", force: true });
     expect(again.ok).toBe(true);
     expect((await row(again.id)).status).toBe("hold");
   });
@@ -335,7 +335,7 @@ describe("不正利用対策・ログイン・設定", () => {
 
 describe("qa の指摘（2026-10-20）", () => {
   it("コース無しで手で入れたセッションは、予定の題・メール・知らせに名前も「null」も出さない", async () => {
-    const r = await admin(worker, cookie, "manual", { kind: "session", startAt: "2026-10-26T10:00", minutes: 90, name: "田中 一郎", payState: "unpaid", googleEmail: "tanaka@gmail.com", sendMail: true });
+    const r = await admin(worker, cookie, "manual", { kind: "session", startAt: "2026-10-26T10:00", minutes: 90, name: "田中 一郎", payState: "unpaid", amount: "6600", googleEmail: "tanaka@gmail.com", sendMail: true });
     expect([...cal.events.values()][0].summary).toBe(`【仮押さえ】${r.id} セッション`);
     const m = mails.find((x) => x.to[0] === "tanaka@gmail.com");
     expect(m.text).not.toContain("null");

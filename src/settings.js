@@ -4,6 +4,9 @@
 
 const NUM = ["bufferMinutes", "leadDays", "horizonDays"];
 const LIMIT = { bufferMinutes: [0, 240], leadDays: [0, 30], horizonDays: [1, 365] };
+const LABEL = { bufferMinutes: "前後に空ける時間（分）", leadDays: "受付の締め切り（何日前まで）", horizonDays: "受付の先（何日先まで）" };
+// 管理画面がその欄の下に文を出せるよう、項目ごとの文（errors）を付ける（booking.js の InputError と同じ形。booking.js がここを読むので、写さず同じ形を作る）
+const fieldError = (k, msg) => Object.assign(new Error(msg), { errors: { [k]: msg } });
 
 export async function loadSettings(site, db) {
   const { results } = await db.prepare("SELECT setting_key, value FROM settings").all();
@@ -22,8 +25,8 @@ export async function saveSettings(site, db, user, input, at) {
   const next = {};
   for (const k of NUM) {
     if (input[k] === undefined) continue;
-    const n = Number(input[k]);
-    if (!Number.isInteger(n) || n < LIMIT[k][0] || n > LIMIT[k][1]) throw new Error(`${k} は ${LIMIT[k][0]}〜${LIMIT[k][1]} の整数で入れてください`);
+    const n = input[k] === null || String(input[k]).trim() === "" ? NaN : Number(input[k]); // 空欄・空白だけを 0 にしない
+    if (!Number.isInteger(n) || n < LIMIT[k][0] || n > LIMIT[k][1]) throw fieldError(k, `${LABEL[k]}は ${LIMIT[k][0]}〜${LIMIT[k][1]} の整数で入れてください`);
     if (n !== cur[k]) next[k] = String(n);
   }
   if (input.calendars !== undefined) {
@@ -33,12 +36,12 @@ export async function saveSettings(site, db, user, input, at) {
   }
   if (input.eventCalendar !== undefined) {
     const v = String(input.eventCalendar).trim();
-    if (!v || v.length > 200) throw new Error("予定を入れるカレンダーが正しくありません");
+    if (!v || v.length > 200) throw fieldError("eventCalendar", "予定を入れるカレンダーが正しくありません");
     if (v !== cur.eventCalendar) next.eventCalendar = v;
   }
   if (input.bank !== undefined) {
     const v = String(input.bank).replace(/\r\n/g, "\n").trim();
-    if (v.length > 500) throw new Error("振込先は500文字までにしてください");
+    if (v.length > 500) throw fieldError("bank", "振込先は500文字までにしてください");
     if (v !== cur.bank) next.bank = v;
   }
   const keys = Object.keys(next);

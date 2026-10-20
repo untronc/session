@@ -1,10 +1,11 @@
 // Worker の入口。施設の設定を受け取って、fetch と scheduled を返す
 //   /                    予約画面（page.js。紙芝居の形）
 //   /api                 予約画面の API（api.js）
-//   /admin               管理画面（ログインしていなければ Google のログインへ）。画面はまだ（次の段で、宿泊の予約システムの管理画面を写して作る）
+//   /admin・/admin/...   管理画面（admin-page.js。1枚の HTML を返し、画面の切り替えは中の JS。ログインしていなければ Google のログインへ）
 //   /admin/login・/admin/callback・/admin/logout
 //   /admin/api/...       管理画面の API（admin.js）
 import { handleAdminApi } from "./admin.js";
+import { adminPage } from "./admin-page.js";
 import { handleApi } from "./api.js";
 import { admit, clearStateCookie, currentUser, finishLogin, logoutCookie, startLogin } from "./auth.js";
 import { CRON_REMIND, dailyJobs, remindJobs } from "./cron.js";
@@ -76,7 +77,7 @@ export function createWorker(site, opts = {}) {
         return handleAdminApi(site, env, request, user, clock(), calendarOf(env));
       }
       if (!user) return new Response(null, { status: 302, headers: { Location: "/admin/login?next=" + encodeURIComponent(p) } });
-      return html(message(site, "管理画面は準備中です（API は動いています）。"));
+      return html(adminPage(site));
     }
     return new Response("Not found", { status: 404 });
   }

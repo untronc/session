@@ -12,6 +12,7 @@
 //   GET  /admin/api/catalog  POST /admin/api/service {...}  POST /admin/api/course {...}
 //   GET  /admin/api/settings  POST /admin/api/settings {...}  GET /admin/api/calendars
 //   GET  /admin/api/stats?month=YYYY-MM                      月ごとの確定の件数と金額（0円・試しの予約は数えない）
+//   GET  /admin/api/me  POST /admin/api/me {name}             画面に出す名前（変更履歴の「だれが」）
 import { addMinutes, cancelRate, dateOf, dueDate, overlaps, parseLocal, refundAmount } from "./calc.js";
 import { eventLabel, holdOnCalendar, InputError, newBookingId } from "./booking.js";
 import { addDays, parseYmd, todayJst, ymd } from "./dates.js";
@@ -39,6 +40,7 @@ export async function handleAdminApi(site, env, request, user, now, cal) {
       if (p === "settings") return json({ ok: true, settings: await loadSettings(site, env.DB) });
       if (p === "calendars") return json({ ok: true, calendars: cal ? await cal.list() : [], connected: !!cal });
       if (p === "stats") return json(await stats(env.DB, q.month));
+      if (p === "me") return json({ ok: true, me: { name: user.display_name, email: user.email } });
       return json({ ok: false, error: "unknown" }, 404);
     }
     if (request.method !== "POST") return json({ ok: false, error: "method" }, 405);
@@ -48,7 +50,7 @@ export async function handleAdminApi(site, env, request, user, now, cal) {
     let body;
     try { body = JSON.parse((await request.text()) || "{}"); } catch { return json({ ok: false, error: "壊れた入力です" }); }
     const ctx = { site, env, db: env.DB, user, now, at: now.toISOString(), cal };
-    const fn = { paid, release, cancel, refund, reschedule, manual, slot: openSlot, "slot-close": closeSlot, rule: addRule, "rule-end": endRule, service: saveService, course: saveCourse, settings: postSettings }[p];
+    const fn = { paid, release, cancel, refund, reschedule, manual, slot: openSlot, "slot-close": closeSlot, rule: addRule, "rule-end": endRule, service: saveService, course: saveCourse, settings: postSettings, me: saveMe }[p];
     if (!fn) return json({ ok: false, error: "unknown" }, 404);
     return json(await fn(ctx, body));
   } catch (err) {
@@ -283,14 +285,12 @@ async function reschedule(ctx, body) {
   ]);
   // 予定を動かす。Meet の URL は同じ予定なので変わらない
   let note = "";
+  const settings = c.settings;
   if (cal && !b.calendar_event_id) {
-    // 仮押さえのときに予定を入れられなかった予約は、ここで入れる
-    note = await holdOnCalendar(env, cal, settings, b, "【予約】");
-    b.calendar_event_id = (await db.prepare("SELECT calendar_event_id FROM bookings WHERE id = ?").bind(b.id).first())?.calendar_event_id || null;
-  }
-  if (cal && b.calendar_event_id) {
+    // 仮押さえのときに予定を入れられなかった予約は、ここで新しい日時で入れる（動かす物が無いので、ここで終わり）
+    note = await holdOnCalendar(ctx.env, cal, settings, { ...b, start_at: start, end_at: end }, b.kind === "meeting" ? "【打ち合わせ】" : b.status === "hold" ? "【仮押さえ】" : "【予約】");
+  } else if (cal && b.calendar_event_id) {
     try {
-      const settings = await loadSettings(ctx.site, db);
       await cal.move(settings.eventCalendar, b.calendar_event_id, { start, end });
     } catch (err) {
       note = "カレンダーの予定を動かせませんでした（" + String(err?.message ?? err).slice(0, 120) + "）。手で動かしてください";
@@ -315,12 +315,20 @@ async function manual(ctx, body) {
   const g = String(body.googleEmail || "").trim().toLowerCase(), cmail = String(body.contactEmail || "").trim().toLowerCase();
   if (g && !EMAIL.test(g)) e.googleEmail = "メールアドレスの形が正しくありません";
   if (cmail && !EMAIL.test(cmail)) e.contactEmail = "メールアドレスの形が正しくありません";
-  const payState = kind === "meeting" ? "free" : ["unpaid", "paid", "free"].includes(body.payState) ? body.payState : "";
+  // 打ち合わせは選ばなければ 0円（要件 5節「打ち合わせは『0円』を初めから選んでおく」）
+  const payState = ["unpaid", "paid", "free"].includes(body.payState) ? body.payState : kind === "meeting" ? "free" : "";
   if (!payState) e.payState = "お金の欄を選んでください";
   let course = null;
   if (kind === "session" && body.courseId) {
     course = await db.prepare("SELECT c.id, c.name, c.price, s.id AS service_id, s.name AS service_name, s.survey_url FROM courses c JOIN services s ON s.id = c.service_id WHERE c.id = ?").bind(body.courseId).first();
     if (!course) e.courseId = "このコースはありません";
+  }
+  // コースの無い予約で 0円でないときは、料金を手で入れる（0〜9,999,999 円の整数）
+  let typed = 0;
+  if (payState && payState !== "free" && !course && !e.courseId) {
+    const s = String(body.amount ?? "").trim();
+    typed = /^\d{1,7}$/.test(s) ? Number(s) : NaN;
+    if (Number.isNaN(typed)) e.amount = "料金（税込）は 0〜9,999,999 円の整数で入れてください";
   }
   const sendMailToo = kind === "session" && body.sendMail === true && !!(cmail || g);
   if (Object.keys(e).length) throw new InputError(e);
@@ -329,7 +337,7 @@ async function manual(ctx, body) {
   if (c.bookings.length) throw new Error("ほかの予約と重なります（" + c.bookings.map((x) => x.id).join("・") + "）");
   if (c.busy && body.force !== true) return { ok: false, needForce: true, error: "カレンダーの予定とぶつかります。入れるなら、もう一度「入れる」を押してください" };
   const id = await newBookingId(db, now);
-  const amount = payState === "free" ? 0 : course ? course.price : Number(body.amount) || 0;
+  const amount = payState === "free" ? 0 : course ? course.price : typed;
   const status = payState === "unpaid" ? "hold" : "confirmed";
   const slot = await db.prepare("SELECT id FROM slots WHERE start_at = ? AND state = 'open'").bind(start).first();
   const due = payState === "unpaid" ? dueDate(now, start) : null;
@@ -457,7 +465,7 @@ async function saveService(ctx, body) {
 async function saveCourse(ctx, body) {
   const { db, at, user } = ctx;
   const name = String(body.name || "").trim();
-  const price = Number(body.price);
+  const price = body.price === "" || body.price == null ? NaN : Number(body.price); // 空欄を 0円にしない
   if (!name || name.length > 100) throw new InputError({ name: "コースの名前を入れてください（100文字まで）" });
   if (!Number.isInteger(price) || price < 0 || price > 9999999) throw new InputError({ price: "料金（税込）は 0〜9,999,999 円の整数で入れてください" });
   const desc = String(body.description || "").trim().slice(0, 500) || null;
@@ -475,4 +483,13 @@ async function saveCourse(ctx, body) {
 
 async function postSettings(ctx, body) {
   return { ok: true, changed: await saveSettings(ctx.site, ctx.db, ctx.user, body, ctx.at) };
+}
+
+/** 画面に出す名前（変更履歴の「だれが」） */
+async function saveMe(ctx, body) {
+  const { db, at, user } = ctx;
+  const name = String(body.name || "").trim().replace(/\s+/g, " ");
+  if (!name || name.length > 100) throw new InputError({ name: "名前を入れてください（100文字まで）" });
+  await db.prepare("UPDATE admin_users SET display_name = ?, updated_at = ?, updated_by = ? WHERE id = ?").bind(name, at, user.google_sub, user.id).run();
+  return { ok: true, me: { name, email: user.email } };
 }

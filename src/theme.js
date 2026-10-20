@@ -4,15 +4,11 @@
 // 色は <html data-theme="shu|green|blue"> で切り替える（3つとも CSS に入れておき、設定を変えたら属性を替えるだけですぐ効く）
 // 文字と地の差は WCAG AA の 4.5:1 以上（e2e/looks.mjs で確かめる）。白地の文字・リンクには p-text・link を使う（青は標準の #0d6efd だと白より明るい地で 4.5 に届かないので濃い方）
 
-export const THEME_KEYS = ["shu", "green", "blue"]; // src/fields.js の theme の選択肢と同じ並び
-export const DEFAULT_THEME = "shu";
+// 90分セッションの予約では、色は untronc の緑1つだけ（予約画面の見本と同じ #006862。宿泊の予約システムの朱・緑・青と「設定」での切り替えは写さない）
+export const THEME_KEYS = ["untronc"];
+export const DEFAULT_THEME = "untronc";
 export const THEMES = {
-  // 朱：文字・ボタン #BA4A25、飾り #D35D35（紙芝居の色5）
-  shu: { label: "朱", note: "既定", p: "#D35D35", solid: "#BA4A25", hover: "#9C3E1E", active: "#833319", rgb: "186,74,37", sub: "#FBE6DE", subBd: "#F0C0AE", text: "#A8421F", link: "#BA4A25", linkHover: "#9C3E1E", linkRgb: "186,74,37", err: "#BA4A25", errBg: "#FFF4EF" },
-  // 緑：#183D43（宿のサイトの濃い緑）
-  green: { label: "緑", note: "", p: "#183D43", solid: "#183D43", hover: "#0F2A2F", active: "#0B2024", rgb: "24,61,67", sub: "#E2ECEB", subBd: "#A8C3C3", text: "#183D43", link: "#183D43", linkHover: "#0F2A2F", linkRgb: "24,61,67", err: "#183D43", errBg: "#EEF4F4" },
-  // 青：Bootstrap 標準の primary #0d6efd。白地以外の文字は #0a58ca
-  blue: { label: "青", note: "Bootstrap 標準", p: "#0d6efd", solid: "#0d6efd", hover: "#0b5ed7", active: "#0a58ca", rgb: "13,110,253", sub: "#cfe2ff", subBd: "#9ec5fe", text: "#0a58ca", link: "#0a58ca", linkHover: "#084298", linkRgb: "10,88,202", err: "#0a58ca", errBg: "#EEF4FF" },
+  untronc: { label: "untronc の緑", note: "", p: "#006862", solid: "#006862", hover: "#00534E", active: "#004A46", rgb: "0,104,98", sub: "#E3EFEE", subBd: "#A9CDCA", text: "#006862", link: "#006862", linkHover: "#00534E", linkRgb: "0,104,98", err: "#006862", errBg: "#EEF5F4" },
 };
 export const themeOf = (v) => (THEME_KEYS.includes(v) ? v : DEFAULT_THEME);
 
