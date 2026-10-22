@@ -478,12 +478,13 @@ const SCRIPT = String.raw`
     var cur = today().slice(0, 7), months = [];
     for (var i = -5; i <= 2; i++) months.push(shiftMonth(cur, i));
     Promise.all(months.map(function (m) { return api('stats?month=' + m); })).then(function (list) {
-      var max = Math.max.apply(null, list.map(function (x) { return x.amount; }).concat([1]));
-      var h = '<h1>売上</h1><p class="form-text">セッションの月ごと。入金済みで確定した予約だけ。0円の予約と、名前に「テスト」「試験」を含む予約は数えません。</p>';
+      var max = Math.max.apply(null, list.map(function (x) { return x.total; }).concat([1]));
+      var h = '<h1>売上</h1><p class="form-text">セッションの月ごと。入金済みで確定した予約と、受け取ったキャンセル料（50%・100%）を足した額。0円の予約と、名前に「テスト」「試験」を含む予約は数えません。</p>';
       h += cardBs('bar-chart-fill', '月別の売上', '<div class="card-body bs-bars">' + list.map(function (x) {
-        var w = x.amount / max * 100;
+        var w = x.total / max * 100;
+        var fee = x.cancelFee > 0 ? '<div class="small text-secondary text-end" style="margin:-.35rem 0 .5rem">うちキャンセル料 ' + x.cancelCount + '件 ' + yen(x.cancelFee) + '</div>' : '';
         return '<div class="d-flex align-items-center gap-2 mb-2" data-bar="' + e(x.month) + '"><span class="bar-label">' + monthLabel(x.month) + (x.month === cur ? '<span class="small text-secondary">（今月）</span>' : '') + '</span><div class="progress flex-grow-1" role="progressbar" aria-label="' + monthLabel(x.month) + 'の売上" aria-valuenow="' + Math.round(w) + '" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar" style="width:' + w + '%"></div></div>' +
-          '<span class="text-end small" style="flex:0 0 3em">' + x.count + '件</span><span class="fw-bold text-end" style="flex:0 0 6.2em;font-size:.8125rem">' + yen(x.amount) + '</span></div>';
+          '<span class="text-end small" style="flex:0 0 3em">' + x.count + '件</span><span class="fw-bold text-end" style="flex:0 0 6.2em;font-size:.8125rem">' + yen(x.total) + '</span></div>' + fee;
       }).join('') + '</div>');
       M.innerHTML = h;
     }).catch(function (x) { M.innerHTML = err(x); });

@@ -115,7 +115,14 @@ async function stats(db, month) {
       WHERE b.status = 'confirmed' AND p.pay_state = 'paid' AND p.amount > 0 AND b.start_at >= ? AND b.start_at < ? AND b.name NOT LIKE '%テスト%' AND b.name NOT LIKE '%試験%'`)
     .bind(month + "-01T00:00", nextMonth(month) + "-01T00:00")
     .first();
-  return { ok: true, month, count: r.count, amount: r.amount };
+  // 受け取ったキャンセル料（50%・100%）もセッションの月の売上に「キャンセル料」と分けて足す（2026-10-22 運用者の答え）。
+  // cancel_fee はキャンセルの時点で入金済みのときだけ入る（入金の前・0%・運用者の都合は 0）
+  const c = await db
+    .prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(p.cancel_fee), 0) AS fee FROM bookings b JOIN payments p ON p.booking_id = b.id
+      WHERE b.status = 'cancelled' AND p.cancel_fee > 0 AND b.start_at >= ? AND b.start_at < ? AND b.name NOT LIKE '%テスト%' AND b.name NOT LIKE '%試験%'`)
+    .bind(month + "-01T00:00", nextMonth(month) + "-01T00:00")
+    .first();
+  return { ok: true, month, count: r.count, amount: r.amount, cancelCount: c.count, cancelFee: c.fee, total: r.amount + c.fee };
 }
 const nextMonth = (m) => { const [y, mm] = m.split("-").map(Number); return mm === 12 ? `${y + 1}-01` : `${y}-${String(mm + 1).padStart(2, "0")}`; };
 

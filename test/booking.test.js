@@ -169,6 +169,33 @@ describe("[要件6-7] キャンセル・日時の変更", () => {
     const id3 = await paidBooking("2026-10-27T13:30");
     expect(await admin(makeWorker(cal, new Date("2026-10-27T01:00:00Z")), cookie, "cancel", { id: id3, operatorFault: true })).toMatchObject({ rate: 0, refund: 6600 });
   });
+  it("受け取ったキャンセル料（50%・100%）は、セッションの月の売上に「キャンセル料」と分けて足す。0%・運用者の都合・試しの予約は足さない", async () => {
+    // 2026-10-22 運用者の答え：セッションの月の売上に「キャンセル料」と分けて足す
+    // 同じメールアドレスは1日の件数に上限があるので、お客様を分ける
+    let n = 0;
+    const paidAs = async (start, over = {}) => {
+      const slot = await open(start);
+      const res = await bookApi(worker, guest(slot, { googleEmail: `kyaku${++n}@gmail.com`, ...over }));
+      expect(res.ok).toBe(true);
+      await admin(worker, cookie, "paid", { id: res.id, paidOn: "2026-10-20" });
+      return res.id;
+    };
+    await paidAs("2026-10-28T13:30"); // 確定のまま 6,600
+    const half = await paidAs("2026-10-25T13:30");
+    await admin(makeWorker(cal, new Date("2026-10-23T03:00:00Z")), cookie, "cancel", { id: half }); // 50% 3,300
+    const full = await paidAs("2026-10-26T13:30");
+    await admin(makeWorker(cal, new Date("2026-10-26T01:00:00Z")), cookie, "cancel", { id: full }); // 100% 6,600
+    const zero = await paidAs("2026-10-29T13:30");
+    await admin(makeWorker(cal, new Date("2026-10-22T03:00:00Z")), cookie, "cancel", { id: zero }); // 0%
+    const fault = await paidAs("2026-10-30T13:30");
+    await admin(makeWorker(cal, new Date("2026-10-30T01:00:00Z")), cookie, "cancel", { id: fault, operatorFault: true }); // 運用者の都合 0%
+    const test = await paidAs("2026-10-27T13:30", { name: "試験 キャンセル" });
+    await admin(makeWorker(cal, new Date("2026-10-27T01:00:00Z")), cookie, "cancel", { id: test }); // 試しの予約は数えない
+    expect(await admin(worker, cookie, "stats?month=2026-10")).toMatchObject({
+      count: 1, amount: 6600, cancelCount: 2, cancelFee: 9900, total: 16500,
+    });
+    expect(await admin(worker, cookie, "stats?month=2026-11")).toMatchObject({ count: 0, amount: 0, cancelCount: 0, cancelFee: 0, total: 0 });
+  });
   it("日時を変えると予定が動き、Meet の URL はそのまま。変更の記録が残る", async () => {
     const id = await paidBooking();
     const url = (await row(id)).meet_url;
