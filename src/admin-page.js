@@ -489,7 +489,7 @@ const SCRIPT = String.raw`
     p = e(p);
     return field('name', p + '-n', '相手の名前', true, input('name', p + '-n', c.name, 'data-k="name" autocomplete="off"')) +
       field('memo', p + '-m', 'メモ', false, '<textarea class="form-control" id="' + p + '-m" data-fk="memo" data-k="memo" rows="2">' + e(c.memo) + '</textarea>') +
-      check(p + '-v', '手で入れる予約の選び肢に出す', !!c.visible, 'data-k="visible"');
+      check(p + '-v', '手で入れる予約の選択肢に出す', !!c.visible, 'data-k="visible"');
   }
   function contractFields(k, p) {
     p = e(p);
