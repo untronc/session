@@ -12,6 +12,13 @@
 //   GET  /admin/api/catalog  POST /admin/api/service {...}  POST /admin/api/course {...}
 //   GET  /admin/api/settings  POST /admin/api/settings {...}  GET /admin/api/calendars
 //   GET  /admin/api/stats?month=YYYY-MM                      月ごとの確定の件数と金額（0円・試しの予約は数えない）
+//   GET  /admin/api/clients                                  相手と、契約と、月ごとの入金（F18・F19）
+//   POST /admin/api/client {id?, name, memo, visible}         相手を登録・直す
+//   POST /admin/api/contract {id?, clientId, name, monthlyAmount, startMonth, endMonth, memo}   月額の契約
+//   POST /admin/api/contract-pay {contractId, month, amount?, paidOn?}   月の「入金済み」を付ける／直す
+//   POST /admin/api/contract-unpay {contractId, month}        月の「入金済み」を外す
+//   POST /admin/api/booking-client {id, clientId}             予約の相手を付ける・付け替える・外す（変更履歴に残る）
+//   GET  /admin/api/client-stats?month=YYYY-MM                相手ごとの集計（F20）
 //   GET  /admin/api/me  POST /admin/api/me {name}             画面に出す名前（変更履歴の「だれが」）
 import { addMinutes, cancelRate, dateOf, dueDate, overlaps, parseLocal, refundAmount } from "./calc.js";
 import { eventLabel, holdOnCalendar, InputError, newBookingId } from "./booking.js";
@@ -40,6 +47,8 @@ export async function handleAdminApi(site, env, request, user, now, cal) {
       if (p === "settings") return json({ ok: true, settings: await loadSettings(site, env.DB) });
       if (p === "calendars") return json({ ok: true, calendars: cal ? await cal.list() : [], connected: !!cal });
       if (p === "stats") return json(await stats(env.DB, q.month));
+      if (p === "clients") return json(await listClients(env.DB));
+      if (p === "client-stats") return json(await clientStats(env.DB, q.month));
       if (p === "me") return json({ ok: true, me: { name: user.display_name, email: user.email } });
       return json({ ok: false, error: "unknown" }, 404);
     }
@@ -50,7 +59,7 @@ export async function handleAdminApi(site, env, request, user, now, cal) {
     let body;
     try { body = JSON.parse((await request.text()) || "{}"); } catch { return json({ ok: false, error: "壊れた入力です" }); }
     const ctx = { site, env, db: env.DB, user, now, at: now.toISOString(), cal };
-    const fn = { paid, release, cancel, refund, reschedule, manual, slot: openSlot, "slot-close": closeSlot, rule: addRule, "rule-end": endRule, service: saveService, course: saveCourse, settings: postSettings, me: saveMe }[p];
+    const fn = { paid, release, cancel, refund, reschedule, manual, slot: openSlot, "slot-close": closeSlot, rule: addRule, "rule-end": endRule, service: saveService, course: saveCourse, settings: postSettings, me: saveMe, client: saveClient, contract: saveContract, "contract-pay": payContract, "contract-unpay": unpayContract, "booking-client": setBookingClient }[p];
     if (!fn) return json({ ok: false, error: "unknown" }, 404);
     return json(await fn(ctx, body));
   } catch (err) {
@@ -73,8 +82,8 @@ async function listBookings(db, from, to) {
 
 async function getBooking(db, id) {
   const b = await db
-    .prepare(`SELECT b.*, c.name AS course_name, s.name AS service_name, s.survey_url, p.amount, p.pay_state, p.due_date, p.payer_name, p.paid_on, p.cancel_rate, p.cancel_fee, p.operator_fault, p.transfer_fee, p.refund_amount, p.refunded_on
-      FROM bookings b LEFT JOIN courses c ON c.id = b.course_id LEFT JOIN services s ON s.id = b.service_id LEFT JOIN payments p ON p.booking_id = b.id WHERE b.id = ?`)
+    .prepare(`SELECT b.*, c.name AS course_name, s.name AS service_name, s.survey_url, cl.name AS client_name, p.amount, p.pay_state, p.due_date, p.payer_name, p.paid_on, p.cancel_rate, p.cancel_fee, p.operator_fault, p.transfer_fee, p.refund_amount, p.refunded_on
+      FROM bookings b LEFT JOIN courses c ON c.id = b.course_id LEFT JOIN services s ON s.id = b.service_id LEFT JOIN clients cl ON cl.id = b.client_id LEFT JOIN payments p ON p.booking_id = b.id WHERE b.id = ?`)
     .bind(String(id || ""))
     .first();
   if (!b) throw new Error("予約が見つかりません");
@@ -122,7 +131,141 @@ async function stats(db, month) {
       WHERE b.status = 'cancelled' AND p.cancel_fee > 0 AND b.start_at >= ? AND b.start_at < ? AND b.name NOT LIKE '%テスト%' AND b.name NOT LIKE '%試験%'`)
     .bind(month + "-01T00:00", nextMonth(month) + "-01T00:00")
     .first();
-  return { ok: true, month, count: r.count, amount: r.amount, cancelCount: c.count, cancelFee: c.fee, total: r.amount + c.fee };
+  // 月額の契約の入金は、入金の日の月に「月額の契約」と分けて足す（入金の日が空＝外した月は数えない）
+  const k = await db
+    .prepare("SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount FROM contract_payments WHERE paid_on >= ? AND paid_on < ?")
+    .bind(month + "-01", nextMonth(month) + "-01")
+    .first();
+  return { ok: true, month, count: r.count, amount: r.amount, cancelCount: c.count, cancelFee: c.fee, contractCount: k.count, contractAmount: k.amount, total: r.amount + c.fee + k.amount };
+}
+
+/** 相手ごとの集計（月ごと）。回数＝確定した予約・打ち合わせ（キャンセルは数えない）。名前に「テスト」「試験」を含む予約は数えない。予約の売上は入金済みで0円でないもの */
+async function clientStats(db, month) {
+  if (!/^\d{4}-\d{2}$/.test(month || "")) throw new Error("月を YYYY-MM で指定してください");
+  const from = month + "-01", to = nextMonth(month) + "-01";
+  const { results: bk } = await db
+    .prepare(`SELECT b.client_id AS client_id, COUNT(*) AS count, COALESCE(SUM(CASE WHEN p.pay_state = 'paid' AND p.amount > 0 THEN p.amount ELSE 0 END), 0) AS amount
+      FROM bookings b JOIN payments p ON p.booking_id = b.id
+      WHERE b.client_id IS NOT NULL AND b.status = 'confirmed' AND b.start_at >= ? AND b.start_at < ? AND b.name NOT LIKE '%テスト%' AND b.name NOT LIKE '%試験%' GROUP BY b.client_id`)
+    .bind(from + "T00:00", to + "T00:00")
+    .all();
+  const { results: ct } = await db
+    .prepare(`SELECT c.client_id AS client_id, COALESCE(SUM(cp.amount), 0) AS amount FROM contract_payments cp JOIN contracts c ON c.id = cp.contract_id
+      WHERE cp.paid_on >= ? AND cp.paid_on < ? GROUP BY c.client_id`)
+    .bind(from, to)
+    .all();
+  const { results: clients } = await db.prepare("SELECT id, name FROM clients ORDER BY name, id").all();
+  const rows = [];
+  for (const c of clients) {
+    const b = bk.find((x) => x.client_id === c.id), k = ct.find((x) => x.client_id === c.id);
+    if (!b && !k) continue;
+    const count = b?.count ?? 0, bookingAmount = b?.amount ?? 0, contractAmount = k?.amount ?? 0;
+    if (!count && !contractAmount) continue;
+    rows.push({ clientId: c.id, name: c.name, count, bookingAmount, contractAmount, total: bookingAmount + contractAmount });
+  }
+  return { ok: true, month, rows };
+}
+
+// ---- コンサルの相手・月額の契約 ----
+
+const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** 相手と、その契約と、契約の月ごとの入金 */
+async function listClients(db) {
+  const { results: clients } = await db.prepare("SELECT id, name, memo, visible FROM clients ORDER BY name, id").all();
+  const { results: contracts } = await db.prepare("SELECT id, client_id, name, monthly_amount, start_month, end_month, memo FROM contracts ORDER BY start_month, id").all();
+  const { results: pays } = await db.prepare("SELECT contract_id, month, amount, paid_on FROM contract_payments ORDER BY month").all();
+  return {
+    ok: true,
+    clients: clients.map((c) => ({ ...c, contracts: contracts.filter((k) => k.client_id === c.id).map((k) => ({ ...k, payments: pays.filter((p) => p.contract_id === k.id).map(({ month, amount, paid_on }) => ({ month, amount, paid_on })) })) })),
+  };
+}
+
+async function saveClient(ctx, body) {
+  const { db, at, user } = ctx;
+  const name = String(body.name || "").trim().replace(/\s+/g, " ");
+  if (!name || name.length > 100) throw new InputError({ name: "相手の名前を入れてください（100文字まで）" });
+  const memo = String(body.memo || "").trim().slice(0, 500) || null;
+  const visible = body.visible === false ? 0 : 1;
+  if (body.id) {
+    const r = await db.prepare("UPDATE clients SET name = ?, memo = ?, visible = ?, updated_at = ?, updated_by = ? WHERE id = ?").bind(name, memo, visible, at, user.google_sub, String(body.id)).run();
+    if (!r.meta.changes) throw new Error("相手が見つかりません");
+    return { ok: true, id: body.id };
+  }
+  const id = crypto.randomUUID();
+  await db.prepare("INSERT INTO clients (id, name, memo, visible, created_at, created_by, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?)").bind(id, name, memo, visible, at, user.google_sub, at, user.google_sub).run();
+  return { ok: true, id };
+}
+
+async function saveContract(ctx, body) {
+  const { db, at, user } = ctx;
+  const e = {};
+  const clientId = String(body.clientId || "");
+  if (!(await db.prepare("SELECT 1 FROM clients WHERE id = ?").bind(clientId).first())) e.clientId = "相手を選んでください";
+  const name = String(body.name || "").trim().replace(/\s+/g, " ");
+  if (!name || name.length > 100) e.name = "契約の名前を入れてください（100文字まで）";
+  const amt = String(body.monthlyAmount ?? "").trim(); // 空欄を 0円にしない
+  const monthly = /^\d{1,7}$/.test(amt) ? Number(amt) : NaN;
+  if (Number.isNaN(monthly)) e.monthlyAmount = "月額（税込・円）は 0〜9,999,999 円の整数で入れてください";
+  const start = String(body.startMonth || "");
+  if (!MONTH.test(start)) e.startMonth = "始まりの月を YYYY-MM で入れてください";
+  const end = body.endMonth ? String(body.endMonth) : null;
+  if (end && (!MONTH.test(end) || end < start)) e.endMonth = "終わりの月は始まりの月以降の YYYY-MM で入れてください（空なら続きます）";
+  if (Object.keys(e).length) throw new InputError(e);
+  const memo = String(body.memo || "").trim().slice(0, 500) || null;
+  if (body.id) {
+    const r = await db.prepare("UPDATE contracts SET client_id = ?, name = ?, monthly_amount = ?, start_month = ?, end_month = ?, memo = ?, updated_at = ?, updated_by = ? WHERE id = ?").bind(clientId, name, monthly, start, end, memo, at, user.google_sub, String(body.id)).run();
+    if (!r.meta.changes) throw new Error("契約が見つかりません");
+    return { ok: true, id: body.id };
+  }
+  const id = crypto.randomUUID();
+  await db.prepare("INSERT INTO contracts (id, client_id, name, monthly_amount, start_month, end_month, memo, created_at, created_by, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(id, clientId, name, monthly, start, end, memo, at, user.google_sub, at, user.google_sub).run();
+  return { ok: true, id };
+}
+
+/** 月の「入金済み」を付ける（同じ月をもう一度送ると、金額と入金の日を直す）。金額の初めの値は月額 */
+async function payContract(ctx, body) {
+  const { db, at, user, now } = ctx;
+  const k = await db.prepare("SELECT * FROM contracts WHERE id = ?").bind(String(body.contractId || "")).first();
+  if (!k) throw new Error("契約が見つかりません");
+  const month = String(body.month || "");
+  if (!MONTH.test(month) || month < k.start_month || (k.end_month && month > k.end_month)) throw new Error("契約の期間（" + k.start_month + "〜" + (k.end_month || "") + "）の中の月を YYYY-MM で入れてください");
+  let amount = k.monthly_amount;
+  if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
+    const s = String(body.amount).trim();
+    if (!/^\d{1,7}$/.test(s)) throw new Error("金額は 0〜9,999,999 円の整数で入れてください");
+    amount = Number(s);
+  }
+  const paidOn = String(body.paidOn || ymd(todayJst(now)));
+  if (!DATE.test(paidOn)) throw new Error("入金の日を YYYY-MM-DD で入れてください");
+  const same = await db.prepare("SELECT id FROM contract_payments WHERE contract_id = ? AND month = ?").bind(k.id, month).first();
+  if (same) await db.prepare("UPDATE contract_payments SET amount = ?, paid_on = ?, updated_at = ?, updated_by = ? WHERE id = ?").bind(amount, paidOn, at, user.google_sub, same.id).run();
+  else await db.prepare("INSERT INTO contract_payments (id, contract_id, month, amount, paid_on, created_at, created_by, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), k.id, month, amount, paidOn, at, user.google_sub, at, user.google_sub).run();
+  return { ok: true, month, amount, paidOn };
+}
+
+/** 月の「入金済み」を外す（行は残し、入金の日を空にする） */
+async function unpayContract(ctx, body) {
+  const { db, at, user } = ctx;
+  const r = await db.prepare("UPDATE contract_payments SET paid_on = NULL, updated_at = ?, updated_by = ? WHERE contract_id = ? AND month = ?").bind(at, user.google_sub, String(body.contractId || ""), String(body.month || "")).run();
+  if (!r.meta.changes) throw new Error("その月の入金は付いていません");
+  return { ok: true };
+}
+
+/** 予約の相手を付ける・付け替える・外す（clientId が空）。前と後を変更履歴に残す */
+async function setBookingClient(ctx, body) {
+  const { db, at, user } = ctx;
+  const b = await db.prepare("SELECT b.id, b.client_id, c.name AS client_name FROM bookings b LEFT JOIN clients c ON c.id = b.client_id WHERE b.id = ?").bind(String(body.id || "")).first();
+  if (!b) throw new Error("予約が見つかりません");
+  const next = body.clientId ? String(body.clientId) : null;
+  const nextRow = next ? await db.prepare("SELECT name FROM clients WHERE id = ?").bind(next).first() : null;
+  if (next && !nextRow) throw new InputError({ clientId: "この相手は登録されていません" });
+  if (next === b.client_id) return { ok: true };
+  await db.batch([
+    db.prepare("UPDATE bookings SET client_id = ?, updated_at = ?, updated_by = ? WHERE id = ?").bind(next, at, user.google_sub, b.id),
+    changeStmt(ctx, b.id, "client", { client_id: b.client_id, client_name: b.client_name }, { client_id: next, client_name: nextRow?.name ?? null }),
+  ]);
+  return { ok: true };
 }
 const nextMonth = (m) => { const [y, mm] = m.split("-").map(Number); return mm === 12 ? `${y + 1}-01` : `${y}-${String(mm + 1).padStart(2, "0")}`; };
 
@@ -338,6 +481,16 @@ async function manual(ctx, body) {
     if (Number.isNaN(typed)) e.amount = "料金（税込）は 0〜9,999,999 円の整数で入れてください";
   }
   const sendMailToo = kind === "session" && body.sendMail === true && !!(cmail || g);
+  // コンサルの相手（任意）。選ぶか、その場で新しく作る
+  let clientId = null, newClient = null;
+  const newName = String(body.newClientName || "").trim().replace(/\s+/g, " ");
+  if (body.clientId) {
+    if (await db.prepare("SELECT 1 FROM clients WHERE id = ?").bind(String(body.clientId)).first()) clientId = String(body.clientId);
+    else e.clientId = "この相手は登録されていません";
+  } else if (newName) {
+    if (newName.length > 100) e.newClientName = "相手の名前は100文字までで入れてください";
+    else { clientId = crypto.randomUUID(); newClient = newName; }
+  }
   if (Object.keys(e).length) throw new InputError(e);
   const end = addMinutes(start, minutes);
   const c = await clashes(ctx, start, end);
@@ -349,12 +502,13 @@ async function manual(ctx, body) {
   const slot = await db.prepare("SELECT id FROM slots WHERE start_at = ? AND state = 'open'").bind(start).first();
   const due = payState === "unpaid" ? dueDate(now, start) : null;
   await db.batch([
-    db.prepare(`INSERT INTO bookings (id, kind, source, status, start_at, end_at, slot_id, service_id, course_id, name, google_email, contact_email, send_mail, change_count, mail_hold, mail_confirm, mail_remind, mail_notify, received_at, created_at, created_by, updated_at, updated_by)
-      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'none', 'none', 'none', 'none', ?, ?, ?, ?, ?)`)
-      .bind(id, kind, status, start, end, slot?.id || null, course?.service_id || null, course?.id || null, name, g || null, cmail && cmail !== g ? cmail : null, sendMailToo ? 1 : 0, at, at, user.google_sub, at, user.google_sub),
+    ...(newClient ? [db.prepare("INSERT INTO clients (id, name, memo, visible, created_at, created_by, updated_at, updated_by) VALUES (?, ?, NULL, 1, ?, ?, ?, ?)").bind(clientId, newClient, at, user.google_sub, at, user.google_sub)] : []),
+    db.prepare(`INSERT INTO bookings (id, kind, source, status, start_at, end_at, slot_id, service_id, course_id, name, google_email, contact_email, send_mail, change_count, mail_hold, mail_confirm, mail_remind, mail_notify, received_at, created_at, created_by, updated_at, updated_by, client_id)
+      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'none', 'none', 'none', 'none', ?, ?, ?, ?, ?, ?)`)
+      .bind(id, kind, status, start, end, slot?.id || null, course?.service_id || null, course?.id || null, name, g || null, cmail && cmail !== g ? cmail : null, sendMailToo ? 1 : 0, at, at, user.google_sub, at, user.google_sub, clientId),
     db.prepare("INSERT INTO payments (booking_id, amount, pay_state, due_date, paid_on, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(id, amount, payState, due, payState === "paid" ? ymd(todayJst(now)) : null, at, user.google_sub, at, user.google_sub),
-    changeStmt(ctx, id, "create", null, { kind, start_at: start, end_at: end, pay_state: payState, amount }),
+    changeStmt(ctx, id, "create", null, { kind, start_at: start, end_at: end, pay_state: payState, amount, ...(clientId ? { client_id: clientId } : {}) }),
   ]);
   const settings = c.settings;
   const b = { ...(await getBooking(db, id)) };

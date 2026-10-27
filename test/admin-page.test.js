@@ -24,7 +24,7 @@ describe("[F15] 管理画面の HTML", () => {
     expect(r.headers.get("Location")).toBe("/admin/login?next=" + encodeURIComponent("/admin/b/261025-0001"));
   });
   it("ログインしていれば、どの画面の住所でも同じ1枚を返す（画面の切り替えはこの中の JS）", async () => {
-    for (const p of ["/admin", "/admin/b/261025-0001", "/admin/new", "/admin/slots", "/admin/stats", "/admin/settings", "/admin/me"]) {
+    for (const p of ["/admin", "/admin/b/261025-0001", "/admin/new", "/admin/slots", "/admin/clients", "/admin/stats", "/admin/settings", "/admin/me"]) {
       const r = await page(p);
       expect(r.status).toBe(200);
       const h = await r.text();
@@ -34,6 +34,14 @@ describe("[F15] 管理画面の HTML", () => {
       expect(r.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
       expect(r.headers.get("Cache-Control")).toBe("no-store");
     }
+  });
+  it("[F18〜F20] 「相手」の画面と売上の「相手ごと」があり、画面の JS は文法が通る", async () => {
+    const h = await (await page("/admin/clients")).text();
+    expect(h).toContain('data-nav="clients"');
+    expect(h).toContain("相手ごとの集計");
+    expect(h).toContain("月額の契約を足す");
+    const js = h.slice(h.lastIndexOf("<script>") + 8, h.lastIndexOf("</script>"));
+    expect(() => new Function(js)).not.toThrow();
   });
   it("画面の色は untronc の緑（予約画面と同じ #006862）", async () => {
     const h = await (await page("/admin")).text();

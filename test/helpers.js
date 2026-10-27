@@ -12,7 +12,7 @@ export const ORIGIN = "https://s.example.jp";
 
 export async function reset() {
   // FK があるので、指す側の表から先に消す
-  for (const t of ["booking_changes", "slot_changes", "payments", "bookings", "slots", "slot_rules", "courses", "services", "settings", "admin_users", "daily_counts", "access_log"]) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ["booking_changes", "slot_changes", "payments", "bookings", "contract_payments", "contracts", "clients", "slots", "slot_rules", "courses", "services", "settings", "admin_users", "daily_counts", "access_log"]) await env.DB.prepare(`DELETE FROM ${t}`).run();
 }
 
 /** 偽物の Google カレンダー。予定（events）と、外の予定（busy）を持つ。busy には入れた予定も出る（本物と同じ） */
