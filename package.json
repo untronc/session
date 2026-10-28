@@ -2,6 +2,7 @@
   "name": "untronc-session",
   "version": "0.1.0",
   "description": "時間枠のセッションの予約（予約画面の API と管理画面。Cloudflare Workers・D1・Google カレンダー）",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "type": "module",
   "engines": {

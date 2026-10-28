@@ -5,3 +5,6 @@ node_modules/
 # 施設ごとの設定（運用者のメール・D1 の ID）は公開しない。手元だけに置く
 sites/*
 public/vendor/
+
+# dev/setup-google.mjs の進み具合（値は書かない）
+dev/setup-google.log
